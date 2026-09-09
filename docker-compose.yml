@@ -1,0 +1,51 @@
+# Whole suite:            SCALE=paper docker compose up -d experiments
+# One experiment:         SCALE=paper docker compose up -d regime
+# Follow:                 docker compose logs -f experiments
+# Shards:                 SHARD_INDEX=0 SHARD_COUNT=4 docker compose up -d shard
+#
+# results/ and paper/ are mounted, so everything written survives the
+# container. results/cache holds the spin-up state and the initial ensembles;
+# deleting it forces them to be recomputed.
+
+x-common: &common
+  build: .
+  image: qgloc:latest
+  environment: &env
+    SCALE: ${SCALE:-smoke}
+    RESULTS_DIR: /work/results
+    PYTHONHASHSEED: "0"
+    OMP_NUM_THREADS: "1"
+    OPENBLAS_NUM_THREADS: "1"
+    MKL_NUM_THREADS: "1"
+  volumes:
+    - ./results:/work/results
+    - ./paper:/work/paper
+
+services:
+
+  experiments:
+    <<: *common
+    container_name: qgloc
+    command: bash /work/scripts/run_all.sh
+
+  regime:
+    <<: *common
+    container_name: qgloc-regime
+    command: python /work/experiments/exp01_regime.py
+
+  shard:
+    <<: *common
+    environment:
+      <<: *env
+      SHARD_INDEX: ${SHARD_INDEX:-0}
+      SHARD_COUNT: ${SHARD_COUNT:-4}
+      METHODS: ${METHODS:-}
+    command: bash /work/scripts/run_all.sh
+
+  notebook:
+    <<: *common
+    container_name: qgloc-nb
+    ports: ["8888:8888"]
+    command: >
+      jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser
+      --allow-root --NotebookApp.token=''
