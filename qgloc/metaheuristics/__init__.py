@@ -42,7 +42,16 @@ LABELS = {
 # flower pollination are both Yang's, and one of the two is enough to represent
 # that family. Adding "firefly" to this list puts it back in every experiment.
 METAHEURISTICS = ["tabu", "annealing", "genetic", "ant", "fpa"]
-CONTROLS = ["random", "exhaustive"]
+# Random sampling is the control for the *search*: a method that cannot beat
+# it at the same budget is doing nothing. The exhaustive sweep is registered
+# but not a control: enumerating r_max^K candidates is 4096 evaluations at
+# K = 4 and r_max = 8, twenty minutes per cycle, so it never completes within
+# a budget the others share and a partial enumeration is not an optimum.
+#
+# The comparison that matters is not one search against another but against
+# assimilating with a fixed uniform radius and no per-cluster optimization at
+# all. That baseline is run as its own arm, labelled "uniform".
+CONTROLS = ["random"]
 
 DEFAULTS = {
     "tabu": dict(tenure=8, iters=500),

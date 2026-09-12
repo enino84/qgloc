@@ -179,7 +179,7 @@ def forecast(bed, X, x_true, rng, stride=None, offset=0):
                 Xn=bed.normalize(Xf), xtn=xtn)
 
 
-def analyse_fast(bed, fc, r_vector, mask=None):
+def analyse_fast(bed, fc, r_vector, mask=None, rebuild_psi=False):
     """EnKF with modified Cholesky, through the cached precision builder.
 
     The same estimator pyteda computes, but rows are cached by
@@ -238,10 +238,16 @@ def analyse_fast(bed, fc, r_vector, mask=None):
     Xa = fc["Xn"].copy()
     Xa[qb, :] = Xn + Z.reshape(nq, N)
     Xa = bed.denormalize(Xa)
-    # psi rebuilt from the analysed q, so the pair satisfies the model's own
-    # constraint instead of drifting off it.
-    for e in range(N):
-        Xa[:, e] = bed.psi_from_q(Xa[:, e])
+
+    # Rebuilding psi means one multigrid Helmholtz solve per member, and it is
+    # only needed when the analysis is going to be propagated: the criterion
+    # scores observations of q and never looks at psi. Doing it inside the
+    # objective cost 1.72 s per evaluation against 0.18, a factor of ten, and
+    # would have put EXP-03 at roughly 690 hours. It is off by default and
+    # switched on for the analysis that actually advances the filter.
+    if rebuild_psi:
+        for e in range(N):
+            Xa[:, e] = bed.psi_from_q(Xa[:, e])
     return Xa
 
 
@@ -314,7 +320,7 @@ def assimilate(bed, X, x_true, r_vector, rng, method="letkf", stride=None,
     """
     fc = forecast(bed, X, x_true, rng, stride=stride, offset=offset)
     if method in ("enkf-modified-cholesky", "fast"):
-        Xa = analyse_fast(bed, fc, r_vector)
+        Xa = analyse_fast(bed, fc, r_vector, rebuild_psi=True)
     else:
         Xa = analyse(bed, fc, r_vector, method=method, extra=extra)
     return Xa, fc["x_true"], fc["xb"], fc["idx"]

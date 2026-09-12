@@ -73,7 +73,14 @@ def split_lattice(n_obs, fraction, rng):
 
 def run_one(bed, X0, x_true0, search, scale, seed, criterion="cv",
             on_cycle=None):
-    """One filter run with the radius re-estimated at every cycle."""
+    """One filter run with the radius re-estimated at every cycle.
+
+    ``search="uniform"`` runs the baseline instead: the same cycles, the same
+    forecasts, but a single fixed radius and no optimization at all. That is
+    the comparison the experiment is really about. Beating another
+    metaheuristic says little; beating a filter that was simply given a good
+    uniform radius is the claim worth making.
+    """
     cfg = bed.cfg
     rng = np.random.default_rng(seed)
     X, x_true = X0.copy(), x_true0.copy()
@@ -119,21 +126,35 @@ def run_one(bed, X0, x_true0, search, scale, seed, criterion="cv",
             return float(np.sqrt(np.mean((bed.normalize(xa) - xtn) ** 2)))
 
         objective = cv if criterion == "cv" else oracle
-        obj = RadiusObjective(objective, budget=scale.budget, r_min=1,
-                              r_max=scale.r_max)
-        theta, info = get_optimizer(search)(
-            obj, np.full(spec.K, 1), np.full(spec.K, scale.r_max),
-            scale.budget, np.random.default_rng(seed * 131 + k),
-            x0=theta_prev if scale.warm_start else None, **params)
+
+        if search == "uniform":
+            # The baseline: no search, one fixed radius everywhere. Scored on
+            # the same objective so the numbers are comparable, but the value
+            # is read off rather than minimized.
+            theta = np.full(spec.K, int(scale.uniform_radius))
+            obj = RadiusObjective(objective, budget=1, r_min=1,
+                                  r_max=scale.r_max)
+            info = dict(J=obj(theta))
+        else:
+            obj = RadiusObjective(objective, budget=scale.budget, r_min=1,
+                                  r_max=scale.r_max)
+            theta, info = get_optimizer(search)(
+                obj, np.full(spec.K, 1), np.full(spec.K, scale.r_max),
+                scale.budget, np.random.default_rng(seed * 131 + k),
+                x0=(theta_prev if (scale.warm_start and theta_prev is not None
+                                   and np.size(theta_prev) == spec.K)
+                    else None),
+                **params)
         theta = np.asarray(theta, dtype=int)
-        # Carry the solution forward only when the parameterization has not
-        # changed size. K is chosen by silhouette each cycle, so the number of
-        # clusters can move, and a warm start of the wrong length is worse
-        # than none.
-        theta_prev = theta if theta.size == spec.K else None
+        # Carry the solution forward. K is chosen by silhouette each cycle, so
+        # the number of clusters can move between cycles; the check at the call
+        # site drops the warm start when the length no longer matches, since a
+        # vector of the wrong length silently makes the search operate in the
+        # wrong dimension.
+        theta_prev = theta
 
         r_vec = spec.expand(theta)
-        Xa = analyse_fast(bed, fc, r_vec)
+        Xa = analyse_fast(bed, fc, r_vec, rebuild_psi=True)
         xa = Xa.mean(axis=1)
         elapsed = time.perf_counter() - t0
 
@@ -184,8 +205,10 @@ def main(scale_name=None):
                           cv_fraction=scale.cv_fraction,
                           ensemble_sizes=list(scale.ensemble_sizes)))
 
-    searches = [s for s in METAHEURISTICS + CONTROLS
-                if method_allowed(LABELS[s])]
+    # "uniform" is the baseline arm, not a search: same cycles, fixed radius,
+    # no optimization.
+    searches = [s for s in METAHEURISTICS + CONTROLS + ["uniform"]
+                if method_allowed(LABELS.get(s, s))]
     cells = shard_cells([(N, s, crit, run)
                          for N in scale.ensemble_sizes
                          for s in searches
@@ -243,19 +266,23 @@ def main(scale_name=None):
                             seed=9000 + 37 * run, criterion=crit,
                             on_cycle=on_cycle)
         for rec in cyc:
-            rows.append(dict(exp_id=EXP_ID, N=N, search=LABELS[search],
-                             is_control=search in CONTROLS, criterion=crit,
-                             run=run, **rec))
+            rows.append(dict(exp_id=EXP_ID, N=N,
+                             search=LABELS.get(search, "Uniform radius"),
+                             is_control=search in CONTROLS,
+                             is_baseline=search == "uniform",
+                             criterion=crit, run=run, **rec))
         for h in hist:
-            hist_rows.append(dict(exp_id=EXP_ID, N=N, search=LABELS[search],
+            hist_rows.append(dict(exp_id=EXP_ID, N=N,
+                                  search=LABELS.get(search, "Uniform radius"),
                                   criterion=crit, run=run, **h))
         for t in tops:
-            top_rows.append(dict(exp_id=EXP_ID, N=N, search=LABELS[search],
+            top_rows.append(dict(exp_id=EXP_ID, N=N,
+                                 search=LABELS.get(search, "Uniform radius"),
                                  criterion=crit, run=run, **t))
         cut = scale.burn_in
         tail = [r["rmse"] for r in cyc[cut:]]
         d = cyc[0]["diverged_at"] if cyc else 0
-        prog.step(f"N={N} {LABELS[search]:<20s} {crit:<6s} run={run} "
+        prog.step(f"N={N} {LABELS.get(search,'Uniform radius'):<20s} {crit:<6s} run={run} "
                   + (f"DIVERGED at {d}" if d >= 0 else
                      f"rmse={np.mean(tail):.4f}" if tail else "no cycles")
                   + f" ({time.time()-t0:.0f}s)")
@@ -291,6 +318,13 @@ def main(scale_name=None):
                     spread=("spread", "mean"), n=("rmse", "count"))
                .reset_index().sort_values(["N", "criterion", "rmse"]))
     summary["gain_pct"] = 100 * (1 - summary["rmse"] / summary["b_rmse"])
+    # And the number the experiment exists for: the gain over assimilating
+    # with a fixed uniform radius and no optimization.
+    base = (summary[summary["search"] == "Uniform radius"]
+            .set_index(["N", "criterion"])["rmse"].rename("rmse_uniform"))
+    summary = summary.join(base, on=["N", "criterion"])
+    summary["gain_over_uniform_pct"] = 100 * (
+        1 - summary["rmse"] / summary["rmse_uniform"])
     ctx.save_table(summary, "summary.csv")
     print()
     print(summary.to_string(index=False))

@@ -278,7 +278,7 @@ $$
 
 The decision variable is a **vector of integers**, and its length is the number
 of radii being estimated. With $K$ clusters it has $K$ components, one per cluster of $q$, each in
-$\{1, \dots, r_{\max}\}$. With $K = 4$ and $r_{\max} = 12$ the space has $12^{4} = 20736$ elements; with
+$\{1, \dots, r_{\max}\}$. With $K = 4$ and $r_{\max} = 8$ the space has $12^{4} = 20736$ elements; with
 $K = 8$, about $4.3\times10^{8}$.
 
 Nothing in the search ever produces a real-valued solution and nothing is

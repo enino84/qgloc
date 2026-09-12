@@ -145,7 +145,7 @@ At **each** assimilation cycle:
 5. optimize the vector of **$K$ integers** against the remaining 70%
 6. use the winner for that cycle's analysis, propagate, next cycle
 
-The decision variable is a vector of integers in $\{1,\dots,12\}$, length $K$.
+The decision variable is a vector of integers in $\{1,\dots,8\}$, length $K$.
 Nothing is rounded.
 
 ### Algorithms
@@ -167,13 +167,12 @@ so the comparison measures the acceptance rule, not the move.
 
 | axis | values | count |
 |---|---|---|
-| search | 5 metaheuristics + 2 controls | 7 |
+| arm | 5 metaheuristics + random sampling + **uniform-radius baseline** | 7 |
 | criterion | `cv` (admissible) / `oracle` (uses the truth) | 2 |
 | ensemble size | 20, 40 | 2 |
 | independent runs | 2 seeds | 2 |
 
-**56 runs x 60 cycles x 120 evaluations = 403200 analyses, about 20 h**, or
-2.5 h with 8 shards.
+**56 runs x 60 cycles x 120 evaluations, about 28 h**, or 3.5 h with 8 shards.
 
 **Measures, one row per cycle:**
 

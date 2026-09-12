@@ -70,7 +70,12 @@ class Scale:
     # observation lattice: density is 1/stride^2
     strides: tuple = (2, 4, 8)
     radii: tuple = (1, 2, 3, 4, 6, 8, 10, 12)
-    r_max: int = 12
+    # 8, not 12. A large radius destroys the sparsity that makes the modified
+    # Cholesky worth using: measured at n_q = 2401, the precision goes from
+    # 0.5% non-zero at r = 1 to 51% at r = 12, and one objective evaluation
+    # from 0.024 s to 1.066 s, a factor of 44. Radii that expensive are also
+    # bad: EXP-01 puts the optimum at the short end.
+    r_max: int = 8
     K_list: tuple = (1, 2, 3, 4, 6)
     # K is chosen by silhouette inside each cycle rather than fixed, so what
     # the scale sets is the range to search over.
@@ -79,6 +84,9 @@ class Scale:
     stride: int = 4
     cv_fraction: float = 0.30
     warm_start: bool = True
+    # The baseline arm: assimilation at a fixed uniform radius, no
+    # optimization. Set from the optimum EXP-01 reports for the stride in use.
+    uniform_radius: int = 1
     # Calibration (EXP-03). Held-out problems, disjoint from everything the
     # benchmark reports.
     calib_problems: int = 4
