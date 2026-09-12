@@ -33,6 +33,11 @@ services:
     container_name: qgloc-regime
     command: python /work/experiments/exp01_regime.py
 
+  clusters:
+    <<: *common
+    container_name: qgloc-clusters
+    command: python /work/experiments/exp03_cycled.py
+
   shard:
     <<: *common
     environment:

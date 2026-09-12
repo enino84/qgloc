@@ -74,3 +74,16 @@ class RadiusObjective:
         """Every evaluation with its argument, for the optimization record."""
         return [dict(step=i, value=float(v), theta=list(map(int, t)))
                 for i, (v, t) in enumerate(zip(self.trace, self.arg_trace))]
+
+    def top(self, k=10):
+        """The k best distinct vectors the search visited, best first.
+
+        The winner alone does not say whether the problem is identified. If the
+        runners-up are close to it the structure is pinned down; if they are
+        very different at nearly the same objective, the landscape is flat and
+        that is itself the result. Reporting them costs nothing and makes the
+        difference visible.
+        """
+        items = sorted(self._cache.items(), key=lambda kv: kv[1])[:int(k)]
+        return [dict(rank=i, value=float(v), theta=list(map(int, t)))
+                for i, (t, v) in enumerate(items)]

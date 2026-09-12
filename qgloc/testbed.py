@@ -5,6 +5,19 @@ The quasi-geostrophic testbed: model, ensemble, observations.
 Three things in this module are decisions rather than conveniences, and each
 was arrived at by measuring what happened without it.
 
+**Only ``q`` is estimated.** The model integrates ``q`` and recovers ``psi``
+by solving the Helmholtz problem at every step, so ``psi`` is a diagnostic and
+not a prognostic variable: ``pyteda``'s ``propagate`` reads ``x0[:field_size]``
+and calls ``_calc_psi(q)``, ignoring whatever ``psi`` it was handed. Measured
+directly: halving ``psi`` while leaving ``q`` untouched and propagating for 20
+time units gives a bit-identical result.
+
+An analysis that corrects the ``psi`` block therefore throws that correction
+away at the next propagation. The state estimated here is ``q`` alone, 2401
+components rather than 4802, and ``psi`` is recomputed from the analysed ``q``.
+That halves the number of regressions, halves the dimension of the linear
+solve, and takes the radius vector from ``2K`` components to ``K``.
+
 **The state is normalized per field.** The potential vorticity ``q`` has a
 climatological standard deviation of order 2000 and the streamfunction ``psi``
 of order 1. An observation error that is reasonable for one is meaningless for
@@ -24,11 +37,26 @@ looks exactly like a broken filter and is not one. A lattice fixes the spacing
 at ``stride`` grid points, which makes the relation between observation density
 and useful radius explicit rather than statistical.
 
-**The ensemble is built by perturbing in units of each field's own spread.** A
-perturbation of 0.5 is enormous for ``psi`` and negligible for ``q``; using an
-absolute number produces an ensemble whose members are indistinguishable from
-one another in ``q``, a background error four thousand times smaller than
-climatology, and nothing for the filter to correct.
+**The ensemble is climatological, not perturbed.** This is the recipe of Sakov
+and Oke (2008): run the model once for a long time, keep snapshots along the
+way, and draw the members and the truth at random from that set. Perturbing a
+state and propagating does not work here, and the reason is measurable. A
+perturbation is mostly energy outside the attractor, and the hyperviscosity
+removes it: starting from 30% of climatology, the background error falls to
+0.068 after 120 time units, a factor of five, and no amount of raising the
+perturbation amplitude compensates because the propagation eats it. Only after
+about 250 units does the surviving component start to grow, reaching 0.872 at
+t = 1000 -- which is exactly the 0.873 a climatological ensemble has from the
+start. The long propagation is a slow way of arriving where the snapshots
+already are.
+
+**The dissipation is ten times the model default.** With ``rkh2 = 1e-12`` the
+norm of ``q`` grows without saturating -- a factor of fourteen between t = 500
+and t = 8000 -- so there is no stationary regime and no climatology to sample.
+At ``rkh2 = 1e-11`` it settles: 1.107e4 at t = 20000 against 1.222e4 at
+t = 60000. Sakov and Oke report the same, raising the dissipation by a factor
+of ten and reducing the step from 1.5 to 1.25 to get a stable assimilating
+system.
 """
 from __future__ import annotations
 
@@ -44,50 +72,76 @@ from pyteda.models import QGModel
 class QGConfig:
     """Everything that defines the testbed."""
     mrefin: int = 6              # 6 -> 97x97 per field, 7 -> 193x193
-    dt: float = 0.5
+    dt: float = 1.25             # Sakov-Oke use 1.25 for the assimilating run
     bc: str = "dirichlet"
     scheme: str = "rk4"
-    spinup: float = 8000.0       # from rest to a developed flow, cached
-    spinup_xb: float = 60.0      # about two e-folding times (tau_L ~ 31.5)
-    spinup_ens: float = 30.0
-    pert_xb: float = 0.20        # as a fraction of each field's spread
-    # Calibrated, not guessed: at 0.05 the ensemble spread is a fifth of the
-    # background error, so the filter believes it knows five times more than it
-    # does and rejects observations it should accept. At 0.3 the ratio is 1.02.
-    pert_ens: float = 0.30
+    rkh2: float = 1e-11          # ten times the model default; see the header
+    # Climatology: one long run, snapshots along it, members drawn at random.
+    spinup: float = 20000.0      # to the stationary regime, cached
+    n_snapshots: int = 60
+    snapshot_every: float = 250.0
     ensemble_size: int = 20
     obs_stride: int = 4          # lattice spacing; density is 1/stride^2
     obs_std: float = 0.05        # in normalized units, so 5% of each spread
     obs_freq: float = 10.0       # time between assimilation cycles
-    inflation: float = 1.05
+    inflation: float = 1.15
     cycles: int = 40
     burn_in: int = 10
 
 
 def build_model(cfg: QGConfig) -> QGModel:
     return QGModel(mrefin=cfg.mrefin, scheme=cfg.scheme, dt=cfg.dt,
-                   bc=cfg.bc, ic_kind="zero", verbose=False)
+                   bc=cfg.bc, rkh2=cfg.rkh2, ic_kind="zero", verbose=False)
 
 
 class Testbed:
     """Model, blocks, climatological scales and the normalization they define."""
 
-    def __init__(self, cfg: QGConfig, x0_ref: np.ndarray):
+    def __init__(self, cfg: QGConfig, snapshots: np.ndarray):
         self.cfg = cfg
         self.model = build_model(cfg)
         self.n = self.model.get_number_of_variables()
         self.blocks = dict(self.model.var_blocks)
         self.g = int(np.sqrt(self.blocks["q"].stop - self.blocks["q"].start))
-        self.x0_ref = np.asarray(x0_ref, dtype=float)
+        self.snapshots = np.asarray(snapshots, dtype=float)
+        if self.snapshots.ndim != 2 or self.snapshots.shape[1] != self.n:
+            raise ValueError(f"snapshots must be (n_snapshots, {self.n})")
+        self.x0_ref = self.snapshots[0]
 
-        # Climatological spread per field, from the reference state. This is
-        # what the normalization and every perturbation are expressed in.
-        self.spread = {k: float(self.x0_ref[b].std()) for k, b in self.blocks.items()}
+        # Climatological spread per field, over the whole snapshot set rather
+        # than one state, since that is what "climatological" means and what
+        # the normalization should be expressed in.
+        self.spread = {k: float(self.snapshots[:, b].std())
+                       for k, b in self.blocks.items()}
         self.scale = np.ones(self.n)
         for k, b in self.blocks.items():
             self.scale[b] = self.spread[k]
 
     # ------------------------------------------------------------------
+    @property
+    def qblock(self):
+        """The prognostic block. Everything estimated lives here."""
+        return self.blocks["q"]
+
+    @property
+    def nq(self):
+        return self.qblock.stop - self.qblock.start
+
+    def psi_from_q(self, x):
+        """Recompute psi from q, the way the model does at every step.
+
+        Used after an analysis so that the state handed back satisfies
+        Lap psi - F psi = q, which an independently corrected psi would not.
+        """
+        x = np.asarray(x, dtype=float)
+        out = x.copy()
+        b = self.blocks["psi"]
+        core = getattr(self.model, "_core", None)
+        q2 = x[self.qblock].reshape(self.g, self.g)
+        if core is not None and hasattr(core, "_calc_psi"):
+            out[b] = np.asarray(core._calc_psi(q2)).ravel()
+        return out
+
     def normalize(self, x):
         return np.asarray(x) / (self.scale if np.ndim(x) == 1
                                 else self.scale[:, None])
@@ -96,7 +150,7 @@ class Testbed:
         return np.asarray(x) * (self.scale if np.ndim(x) == 1
                                 else self.scale[:, None])
 
-    def perturbation(self, rng, fraction):
+    def _unused_perturbation(self, rng, fraction):
         """A perturbation that respects the model's own constraints.
 
         Two of them, and ignoring either puts the ensemble outside the space of
@@ -152,22 +206,26 @@ class Testbed:
 
     # ------------------------------------------------------------------
     def build_ensemble(self, seed):
-        """Phases 2 and 3 of the recipe, plus the synchronized truth."""
+        """Members and truth drawn at random from the climatological set.
+
+        No perturbation and no per-member spin-up: every member is already a
+        state of the attractor, and the dispersion between them is the
+        variability the model itself produces. This is what Sakov and Oke do,
+        and the measurements in the module header say why nothing else works.
+        """
         cfg = self.cfg
         rng = np.random.default_rng(seed)
-        xb = self.model.propagate(self.x0_ref + self.perturbation(rng, cfg.pert_xb),
-                                  np.array([0.0, cfg.spinup_xb]))
-        X = np.empty((self.n, cfg.ensemble_size))
-        for k in range(cfg.ensemble_size):
-            X[:, k] = self.model.propagate(
-                xb + self.perturbation(rng, cfg.pert_ens),
-                np.array([0.0, cfg.spinup_ens]))
-        x_true = self.model.propagate(
-            self.x0_ref, np.array([0.0, cfg.spinup_xb + cfg.spinup_ens]))
+        need = cfg.ensemble_size + 1
+        if self.snapshots.shape[0] < need:
+            raise ValueError(f"need {need} snapshots, have "
+                             f"{self.snapshots.shape[0]}")
+        pick = rng.choice(self.snapshots.shape[0], size=need, replace=False)
+        x_true = self.snapshots[pick[0]].copy()
+        X = self.snapshots[pick[1:]].T.copy()
         return X, x_true
 
     # ------------------------------------------------------------------
-    def checkerboard(self, stride, offset=0, fields=("q", "psi")):
+    def checkerboard(self, stride, offset=0, fields=("q",)):
         """Observed state indices on a regular lattice of the given spacing.
 
         A lattice rather than a random subset, so that every analysis point is

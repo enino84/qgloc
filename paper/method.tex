@@ -1,0 +1,466 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,
+            urlcolor=blue!50!black}
+
+\newtheorem{remark}{Remark}
+\theoremstyle{definition}
+\newtheorem*{definition*}{Definition}
+\newcommand{\Bmat}{\mathbf{B}}
+\newcommand{\Lmat}{\mathbf{L}}
+\newcommand{\Dmat}{\mathbf{D}}
+\newcommand{\Hmat}{\mathbf{H}}
+\newcommand{\Rmat}{\mathbf{R}}
+\newcommand{\Xmat}{\mathbf{X}}
+\newcommand{\xvec}{\mathbf{x}}
+\newcommand{\yvec}{\mathbf{y}}
+\newcommand{\rvec}{\mathbf{r}}
+
+\title{\textbf{Estimating a clustered localization radius\\
+for the modified-Cholesky ensemble Kalman filter:\\
+a combinatorial formulation}}
+
+\author{Working note --- not a submission draft}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+This note sets out, in one place, what the experiment suite computes and why it
+is built the way it is. The localization radius of a modified-Cholesky ensemble
+Kalman filter is treated as a vector of integers, one per cluster of grid
+points, where the clusters come from ensemble-derived features rather than from
+position. The resulting problem is combinatorial with $r_{\max}^{2K}$
+configurations, and six metaheuristics are compared on it against two controls.
+The quantity being minimized is computed from observations alone, by
+withholding part of the observation lattice; an oracle that uses the true state
+is run alongside as an upper bound on what any selection rule could achieve.
+Several design decisions that look arbitrary are consequences of measurements
+reported here, and two open problems are stated rather than hidden.
+\end{abstract}
+
+\section{What the problem is}
+
+The analysis step of an ensemble Kalman filter combines a forecast ensemble
+with observations. With an ensemble far smaller than the state dimension, the
+sample covariance is rank deficient and carries spurious correlations between
+distant variables. Localization removes them, and every localization scheme
+depends on a radius of influence.
+
+That radius is normally chosen by sweeping it against a known truth in a
+synthetic experiment and then freezing it. The question here is whether it can
+be \emph{estimated} instead --- from observations alone --- and whether it pays
+to let it vary in space.
+
+\subsection{The filter}
+
+We use the modified-Cholesky estimator of the precision matrix
+\cite{bickel2008,nino2018}. Let $\Xmat^b \in \mathbb{R}^{n \times N}$ be the
+forecast ensemble, $\mathbf{\Delta X}$ its deviations from the mean. For each
+component $i$ with predecessor set $P(i, r_i)$ --- the neighbours of $i$ within
+radius $r_i$ whose index is lower --- solve the ridge regression
+%
+\begin{equation}
+  \boldsymbol{\beta}_i
+  = \big(\Xmat_{P}^{\top}\Xmat_{P} + \alpha \mathbf{I}\big)^{-1}
+    \Xmat_{P}^{\top}\,\mathbf{\Delta X}_{i},
+  \qquad
+  \Xmat_{P} = \mathbf{\Delta X}_{P(i,r_i)}^{\top},
+  \label{eq:ridge}
+\end{equation}
+%
+and assemble
+%
+\begin{equation}
+  \Lmat_{ii} = 1, \quad
+  \Lmat_{i,P(i,r_i)} = -\boldsymbol{\beta}_i^{\top}, \quad
+  \Dmat_{ii} = \operatorname{var}\!\big(\mathbf{\Delta X}_i - \Xmat_P \boldsymbol{\beta}_i\big)^{-1},
+  \qquad
+  \widehat{\Bmat}^{-1}(\rvec) = \Lmat^{\top}\Dmat\,\Lmat .
+  \label{eq:precision}
+\end{equation}
+%
+The analysis then solves
+$\big(\widehat{\Bmat}^{-1} + \Hmat^{\top}\Rmat^{-1}\Hmat\big)\,
+ \delta\xvec = \Hmat^{\top}\Rmat^{-1}(\yvec - \Hmat\xvec^b)$.
+
+Two properties of \eqref{eq:precision} drive everything that follows.
+
+\begin{remark}[Row separability]
+Row $i$ of $\Lmat$ and entry $\Dmat_{ii}$ depend on $r_i$ \emph{and on nothing
+else}. Changing one component of the radius vector therefore leaves every other
+row untouched.
+\end{remark}
+
+\begin{remark}[Positive definiteness is structural]
+$\widehat{\Bmat}^{-1}$ is positive definite by construction for any $\rvec$,
+because it has the form $\Lmat^{\top}\Dmat\Lmat$ with $\Dmat$ diagonal and
+positive. Truncating an already-formed precision matrix does not preserve this:
+in a companion measurement, masking entries beyond a given distance produced an
+indefinite matrix in $44$ of $44$ cases tested, with minimum eigenvalues as
+negative as $-2.8\times 10^{4}$.
+\end{remark}
+
+\section{The decision variable}
+
+\subsection{Clusters, not grid points}
+
+Giving every component its own radius means $n$ parameters --- here $n = 18818$
+--- fitted against a few hundred observations. That does not fail for want of a
+better search. In a companion experiment on a smaller system, an oracle with
+full access to the truth reduced the analysis error by $59\%$ on the cycle it
+optimized, and the same radius field made the error $22\%$ \emph{worse} on the
+following cycles, performing worse than a random shuffle of its own values. The
+structure it found was the cycle's noise.
+
+We therefore group the grid points of each field into $K$ clusters and estimate
+one radius per cluster. The features are computed from the forecast ensemble
+alone --- the log background variance and the ensemble correlation at lags one
+and two, averaged over the four directions --- so the grouping is admissible in
+the same sense as the criterion. Clustering is by $k$-means on those features.
+
+\begin{remark}[The clusters need not be spatially contiguous]
+Points are grouped by how their ensemble behaves, not by where they sit. Two
+points at opposite corners of the domain can share a radius. One consequence
+matters for the search: a single decision variable controls grid points
+scattered over the whole domain, and the variables are close to independent of
+one another.
+\end{remark}
+
+\subsection{An integer vector}
+
+With two fields, the decision variable is
+%
+\begin{equation}
+  \boldsymbol{\theta}
+  = (\theta_1, \dots, \theta_K,\ \theta_{K+1}, \dots, \theta_{2K})
+  \in \{1, \dots, r_{\max}\}^{2K},
+\end{equation}
+%
+the first $K$ entries the radii of the clusters of $q$ and the next $K$ those of
+$\psi$. The expansion to the $n$ per-component radii is the deterministic map
+$r_j = \theta_{c(j)}$, with $c(j)$ the cluster of point $j$; it is not part of
+the search. With $K = 4$ and $r_{\max} = 12$ the space has $12^{8} \approx
+4.3 \times 10^{8}$ elements.
+
+Nothing in the search produces a real-valued solution and nothing is rounded.
+
+\section{The objective}
+
+\subsection{Why observations must be withheld}
+
+Scoring the analysis against the observations it assimilated is circular. In a
+direct measurement, that objective fell monotonically as the radius shrank,
+reaching its minimum at the smallest admissible value: a short radius makes each
+point fit its own observation and the residual goes to zero. The criterion
+rewards copying the data.
+
+So the observation set $\mathcal{O}$ is split, $\mathcal{O} = \mathcal{T} \cup
+\mathcal{V}$, the analysis is computed from $\mathcal{T}$ alone, and the result
+is scored at $\mathcal{V}$:
+%
+\begin{equation}
+  J(\boldsymbol{\theta})
+  = \frac{1}{|\mathcal{V}|}
+    \big\| \yvec_{\mathcal{V}}
+           - \Hmat_{\mathcal{V}}\,\xvec^{a}(\boldsymbol{\theta}; \mathcal{T})
+    \big\|^{2}_{\Rmat^{-1}_{\mathcal{V}}} .
+  \label{eq:objective}
+\end{equation}
+%
+No reference trajectory enters \eqref{eq:objective}.
+
+\subsection{One partition or many}
+
+A single partition already removes the circularity. Repeating it over $B$ draws
+reduces variance, and the two natural aggregations differ:
+
+\begin{itemize}
+  \item \textbf{Averaging} $J$ over the $B$ partitions and minimizing the mean.
+  \item \textbf{Voting}: minimize each realization separately and take, for each
+        component, the mode of the $B$ winning values. Because the radii are
+        integers the mode needs no binning.
+\end{itemize}
+
+Voting is the more robust of the two when the landscape is flat, since each
+vote only has to fall in the right place rather than locate an exact minimum.
+It is also the more expensive: $B$ optimizations instead of one.
+
+\begin{remark}[A diagnostic that comes free]
+The agreement among votes --- how many of the $B$ winners a component's mode
+collects --- says whether the structure is identified or whether noise is being
+averaged. In the companion experiment the agreement was $7$ out of $30$, which
+is what a null result looks like.
+\end{remark}
+
+\subsection{The oracle}
+
+Alongside \eqref{eq:objective} we run
+$J_{\text{oracle}}(\boldsymbol{\theta}) = \|\xvec^{a}(\boldsymbol{\theta})
+- \xvec^{\text{true}}\|$, which no operational system can compute. Its purpose
+is to bound what any selection rule could achieve. If a clustered radius does
+not beat a uniform one \emph{with the truth in hand}, there is nothing to
+estimate and the negative result is clean.
+
+\section{The searches}
+
+All six share one neighbourhood, so that a comparison between them measures the
+acceptance rule and not the move.
+
+\begin{definition*}[Neighbourhood]
+$\mathcal{N}(\boldsymbol{\theta})$ is the set of vectors that differ from
+$\boldsymbol{\theta}$ in exactly one component. With a step $s$, the new value
+is drawn from $\{\theta_j - s, \dots, \theta_j + s\} \cap [1, r_{\max}]$;
+with $s = \infty$, from the whole range.
+\end{definition*}
+
+\begin{algorithm}[t]
+\caption{Tabu search on the integer radius vector}
+\begin{algorithmic}[1]
+\State $\boldsymbol{\theta} \gets$ random vector in $\{1,\dots,r_{\max}\}^{2K}$;
+       $\boldsymbol{\theta}^\star \gets \boldsymbol{\theta}$
+\State $T \gets \emptyset$ \Comment{tabu list of (component, value) pairs}
+\While{budget remains}
+  \State $\mathcal{C} \gets \{\,\boldsymbol{\theta}' \in
+         \mathcal{N}(\boldsymbol{\theta}) :
+         (j, \theta'_j) \notin T \ \text{or}\
+         J(\boldsymbol{\theta}') < J(\boldsymbol{\theta}^\star)\,\}$
+         \Comment{aspiration}
+  \State $\boldsymbol{\theta} \gets \arg\min_{\boldsymbol{\theta}'
+         \in \mathcal{C}} J(\boldsymbol{\theta}')$
+  \State add $(j, \theta_j)$ to $T$ for $\tau$ iterations
+  \If{$J(\boldsymbol{\theta}) < J(\boldsymbol{\theta}^\star)$}
+      $\boldsymbol{\theta}^\star \gets \boldsymbol{\theta}$
+  \EndIf
+\EndWhile
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{Discrete flower pollination}
+\begin{algorithmic}[1]
+\State initialize a population of $S$ integer vectors; $\boldsymbol{\theta}^\star
+       \gets$ best of them
+\While{budget remains}
+  \For{each individual $\boldsymbol{\theta}^{(s)}$}
+    \If{$\mathrm{rand} > p$} \Comment{global pollination}
+      \State $m \gets$ a L\'evy draw mapped to $\{1,\dots,2K\}$
+      \State copy $m$ randomly chosen components from
+             $\boldsymbol{\theta}^\star$ into $\boldsymbol{\theta}^{(s)}$
+    \Else \Comment{local pollination}
+      \State pick $u, v$ at random; let $\mathcal{D} =
+             \{j : \theta^{(u)}_j \neq \theta^{(v)}_j\}$
+      \State copy a random subset of $\mathcal{D}$ from
+             $\boldsymbol{\theta}^{(u)}$ into $\boldsymbol{\theta}^{(s)}$
+    \EndIf
+    \State accept if improved; update $\boldsymbol{\theta}^\star$
+  \EndFor
+\EndWhile
+\end{algorithmic}
+\end{algorithm}
+
+\noindent
+The two moves are the discrete reading of the continuous algorithm
+\cite{yang2012}. The L\'evy step does not produce a position; it produces
+\emph{how many} components a move copies, so its heavy tail gives mostly small
+moves with occasional large ones, which is the property the flight contributes.
+Following the reference implementation, the global step is taken when
+$\mathrm{rand} > p$, so $p = 0.8$ means global pollination one time in five.
+
+\medskip
+\noindent
+The remaining four:
+
+\begin{description}
+  \item[Simulated annealing] the same neighbourhood as tabu, accepting a
+    worsening move with probability $\exp(-\Delta/T)$; the step shrinks with
+    temperature, so it is a tabu search with an unrestricted but cooling
+    neighbourhood rather than a different algorithm.
+  \item[Genetic algorithm] uniform crossover on whole components --- integers
+    have no meaningful midpoint --- with one-component mutation and tournament
+    selection.
+  \item[Ant colony] a pheromone table $\tau \in \mathbb{R}^{2K \times r_{\max}}$
+    over (component, value) pairs. Each ant builds a whole vector by choosing a
+    value per component independently with probability
+    $\propto \tau_{j,v}^{\,a}$; the best ants reinforce, everything evaporates.
+    \emph{This is the search the parameterization suits best}: because the
+    clusters are not spatially contiguous their radii are close to independent,
+    and the pheromone accumulates evidence about each one separately, so an ant
+    can combine the good value of one cluster with that of another even though
+    the two have never appeared together.
+  \item[Firefly] attraction becomes a probability of copying: each component of
+    a brighter individual is copied with probability $\beta$, decaying with the
+    Hamming distance between the two vectors.
+\end{description}
+
+\noindent
+Two \textbf{controls}, which are not competitors but the calibration of the
+comparison: uniform random sampling at the same budget, and an exhaustive sweep
+where the space is small enough to enumerate. When the sweep completes, every
+other search is scored as a gap to the true optimum rather than against its
+rivals.
+
+\section{Cost, and what it forces}
+
+\subsection{Row caching}
+
+Row separability has a direct consequence. The pair $(i, r_i)$ determines row
+$i$ of $\Lmat$ and entry $\Dmat_{ii}$ completely, so they can be cached. A move
+that changes one cluster then recomputes only that cluster's rows, and a move
+that revisits a radius recomputes nothing.
+
+Profiling one analysis at $n = 4802$: $7.8$\,s in total, $7.2$ in the precision,
+and $5.1$ of those inside \texttt{scikit-learn} --- $4800$ calls to
+\texttt{Ridge.fit}, one per grid point, of which $2.1$\,s were input validation.
+Each regression has four predecessors and forty members and takes microseconds
+to solve directly. Solving \eqref{eq:ridge} in closed form and caching by row
+takes a warm rebuild from $3.48$\,s to $0.126$\,s, a factor of $28$.
+
+\begin{remark}[An argument for the trajectory methods]
+A move that changes one component costs a fraction of a full evaluation, while
+a move that changes the whole vector costs all of it. This is a property of the
+problem, not of the implementation, and it favours tabu search and annealing
+over the population methods in a way that budget-counted comparisons at equal
+\emph{evaluations} do not show.
+\end{remark}
+
+\subsection{What still does not fit}
+
+At $n = 18818$ with $N = 40$, one analysis costs $11$\,s. Optimizing inside
+every assimilation cycle with $B$ partitions and a budget of $P$ evaluations
+costs $B \cdot P \cdot 11$ seconds per cycle: with $B = 10$, $P = 40$ and $40$
+cycles, about $49$ hours per run. The options are to optimize every $M$ cycles
+rather than every cycle --- defensible, since the radius is supposed to vary
+slowly --- to reduce $B$, or to update the analysis solve under a low-rank
+change instead of re-solving. The last has not been implemented.
+
+\section{The testbed}
+
+The model is the $1.5$-layer quasi-geostrophic system of Sakov and
+Oke~\cite{sakov2008},
+%
+\begin{equation}
+  q_t = -\psi_x - \varepsilon J(\psi, q) - A\,\triangle^{3}\psi
+        + 2\pi \sin(2\pi y), \qquad q = \triangle\psi - F\psi,
+\end{equation}
+%
+on the unit square with $\psi = \triangle\psi = \triangle^2\psi = 0$ on the
+boundary, $F = 1600$, $\varepsilon = 10^{-5}$. It was chosen because Lorenz-96
+cannot answer the question: with a uniform grid, uniform forcing and identical
+observations everywhere, no grid point has any reason to want a different radius
+from its neighbour, so a negative result there says nothing about the idea. The
+QG model has two fields with genuinely different correlation scales --- $q$
+carries fine filaments while $\psi$ solves a Helmholtz problem on $q$ and is
+smooth --- and a flow that is not homogeneous.
+
+Three settings are consequences of measurements rather than choices.
+
+\paragraph{The dissipation is ten times the model default.}
+At $\mathrm{rkh2} = 10^{-12}$ the norm of $q$ grows without saturating, a factor
+of fourteen between $t = 500$ and $t = 8000$, so there is no stationary regime
+and no climatology to sample. At $10^{-11}$ it settles: $1.107 \times 10^{4}$ at
+$t = 20000$ against $1.222 \times 10^{4}$ at $t = 60000$. Sakov and Oke report
+the same, raising the dissipation by ten and reducing the step from $1.5$ to
+$1.25$ for a stable assimilating system.
+
+\paragraph{The ensemble is climatological.}
+One long run, snapshots along it, members and truth drawn at random from that
+set. Perturbing a state and propagating does not work here, and the reason was
+measured: a perturbation is mostly energy off the attractor and the
+hyperviscosity removes it. Starting from $30\%$ of climatology the background
+error falls to $0.068$ after $120$ time units, a factor of five, and raising the
+amplitude does not compensate because the propagation eats it. Only after about
+$250$ units does the surviving component grow, reaching $0.872$ at $t = 1000$ ---
+exactly what a climatological ensemble has from the start.
+
+\paragraph{Observations sit on a regular lattice.}
+With a random subset the spacing fluctuates, so some local domains hold several
+observations and others none, and the analysis at a point with an empty domain
+is just the background. Measured at $2\%$ random density, the analysis left $q$
+unchanged to four decimal places at \emph{every} radius, which looks like a
+broken filter and is not one.
+
+\section{The experiments}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+Identifier & Question & Output \\
+\midrule
+\textsc{exp-00-setup} & Is the testbed what it claims to be?
+  & climatology, ensemble, lattice \\
+\textsc{exp-01-regime} & Where is the radius a two-sided decision?
+  & optimum vs.\ observation density \\
+\textsc{exp-02-clusters} & Does a clustered radius pay, and which search finds it?
+  & gain over uniform; search comparison \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+\textsc{exp-01} sweeps the observation lattice spacing against a uniform radius
+and reports, per density, whether the optimum falls in the \emph{interior} of
+the admissible range. An optimum at the boundary means the configuration has
+not reached the regime where the radius trades one error against another, and
+no estimation experiment run there would mean anything.
+
+\textsc{exp-02} runs the six searches and the two controls at equal budget,
+under both \eqref{eq:objective} and the oracle, for $K \in \{1,2,3,4,6\}$.
+
+\section{Open problems}
+
+\paragraph{The precision matrices do not yet agree to machine precision.}
+On a single row the closed-form ridge reproduces \texttt{scikit-learn} to
+$2.4 \times 10^{-16}$. After the boundary components were excluded from
+estimation --- $q$ vanishes there, so $1/\mathrm{var}$ is infinite, and
+\texttt{pyteda} produces $290$ infinities at $n = 4802$ --- the assembled
+matrices differ by tens of percent, with the largest discrepancies on diagonal
+entries of order $10^{13}$. Whether that is confined to those degenerate rows or
+whether excluding the boundary changes the interior regressions has not been
+traced. The equivalence test is marked expected-to-fail rather than relaxed
+until it passes.
+
+\paragraph{Simulated annealing underperforms random sampling.}
+On a separable quadratic over four components, averaged across six seeds, tabu
+reaches the exact optimum every time, random sampling reaches $3.0$, and
+annealing reaches $4.0$; slower cooling makes it worse. It spends too much of a
+small budget on temperature levels. It is left in the comparison as it
+performs.
+
+\paragraph{The state is normalized per field, and that is an implementation
+decision.} Each field is divided by its climatological spread before the
+analysis and restored after. The reason is the observation error: \texttt{pyteda}'s
+LETKF reads a single scalar variance, so with $q$ of order $10^{3}$ and $\psi$
+of order $1$ no isotropic error suits both. It is not part of the
+modified-Cholesky method and can be removed by passing a heterogeneous $\Rmat$.
+
+\begin{thebibliography}{9}
+\bibitem{bickel2008} P.~J. Bickel and E.~Levina.
+  Regularized estimation of large covariance matrices.
+  \emph{The Annals of Statistics}, 36(1):199--227, 2008.
+\bibitem{nino2018} E.~D. Nino-Ruiz, A.~Sandu, and X.~Deng.
+  An ensemble Kalman filter implementation based on modified Cholesky
+  decomposition for inverse covariance matrix estimation.
+  \emph{SIAM Journal on Scientific Computing}, 40(2):A867--A886, 2018.
+\bibitem{sakov2008} P.~Sakov and P.~R. Oke.
+  A deterministic formulation of the ensemble Kalman filter: an alternative to
+  ensemble square root filters. \emph{Tellus A}, 60(2):361--371, 2008.
+\bibitem{yang2012} X.-S. Yang.
+  Flower pollination algorithm for global optimization.
+  In \emph{Unconventional Computation and Natural Computation}, LNCS 7445,
+  pages 240--249, Springer, 2012.
+\end{thebibliography}
+
+\end{document}
