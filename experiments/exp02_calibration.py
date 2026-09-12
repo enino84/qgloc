@@ -95,11 +95,18 @@ def build_problems(bed, scale, n_problems, seed_base=770_000):
     forecasts they happened to be handed.
     """
     problems = []
-    for i in range(n_problems):
+    i = 0
+    while len(problems) < n_problems and i < 4 * n_problems:
         seed = seed_base + 101 * i
+        i += 1
         X, x_true = bed.build_ensemble(seed)
         rng = np.random.default_rng(seed)
-        fc = forecast(bed, X, x_true, rng, stride=scale.stride)
+        try:
+            fc = forecast(bed, X, x_true, rng, stride=scale.stride)
+        except RuntimeError:
+            # A forecast that cannot be propagated is skipped rather than
+            # allowed to end the calibration; the next seed is tried.
+            continue
 
         lab, _ = cluster_auto(fc["Xf"], bed.qblock, bed.g,
                               K_range=scale.K_range, seed=seed)

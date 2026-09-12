@@ -33,7 +33,8 @@ import pandas as pd
 
 from common import (ExperimentContext, cached_ensemble, get_scale, latex_table,
                     make_testbed, parse_cli, setup_matplotlib, shard_cells)
-from qgloc import SnapshotWriter, run_cycles, score
+from qgloc.progress import log
+from qgloc import Diverged, SnapshotWriter, run_cycles, score
 from qgloc.progress import Progress
 
 EXP_ID = "EXP-01-REGIME"
@@ -73,16 +74,31 @@ def main(scale_name=None):
                              if isinstance(b, (int, float))},
                     stride=_st, radius=_r, cycle=k, n_obs=int(idx.size))
 
-        cyc = run_cycles(bed, X0, xt0, float(r), 7000 + 13 * s,
-                         method=scale.methods[0], stride=stride,
-                         on_cycle=on_cycle)
+        try:
+            cyc = run_cycles(bed, X0, xt0, float(r), 7000 + 13 * s,
+                             method=scale.methods[0], stride=stride,
+                             on_cycle=on_cycle)
+            diverged, at = False, -1
+        except Diverged as exc:
+            # Recorded, not fatal: which combinations of density and radius a
+            # scheme cannot survive is part of what the sweep measures.
+            cyc, diverged = [], True
+            at = int(str(exc).split()[1].rstrip(":")) if "cycle" in str(exc) else 0
+            log(f"diverged at cycle {at}: stride={stride} r={r} run={s}", EXP_ID)
         for rec in cyc:
             rows.append(dict(exp_id=EXP_ID, method=scale.methods[0],
                              stride=stride, radius=r, run=s,
-                             density=bed.density(stride), **rec))
+                             density=bed.density(stride), diverged=0,
+                             diverged_at=-1, **rec))
+        if diverged:
+            rows.append(dict(exp_id=EXP_ID, method=scale.methods[0],
+                             stride=stride, radius=r, run=s,
+                             density=bed.density(stride), diverged=1,
+                             diverged_at=at, cycle=at))
         prog.step(f"stride={stride} r={r} run={s} "
-                  f"q={score(bed, cyc, 'rmse_q'):.4f} "
-                  f"psi={score(bed, cyc, 'rmse_psi'):.4f}")
+                  + ("DIVERGED at %d" % at if diverged else
+                     f"q={score(bed, cyc, 'rmse_q'):.4f} "
+                     f"psi={score(bed, cyc, 'rmse_psi'):.4f}"))
     prog.done()
 
     df = pd.DataFrame(rows)
@@ -92,6 +108,16 @@ def main(scale_name=None):
         ctx.finish(summary=dict(n_cells=len(cells)))
         return
 
+    # Diverged cells carry no per-cycle metrics; they are summarised
+    # separately and excluded from the means.
+    div = (df.groupby(["stride", "radius"])["diverged"].max()
+           .rename("diverged").reset_index())
+    ctx.save_table(div, "divergence.csv")
+    n_div = int(div["diverged"].sum())
+    if n_div:
+        log(f"{n_div} of {len(div)} (stride, radius) combinations diverged",
+            EXP_ID)
+    df = df[df["diverged"] == 0]
     post = df[df["cycle"] >= scale.burn_in]
     summary = (post.groupby(["stride", "radius"])
                .agg(density=("density", "first"), p_obs=("p_obs", "first"),

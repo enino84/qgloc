@@ -72,7 +72,13 @@ from pyteda.models import QGModel
 class QGConfig:
     """Everything that defines the testbed."""
     mrefin: int = 6              # 6 -> 97x97 per field, 7 -> 193x193
-    dt: float = 1.25             # Sakov-Oke use 1.25 for the assimilating run
+    # Sakov and Oke use 1.25 for the assimilating run, arrived at by reducing
+    # it from the 1.5 that free runs allow. The same reduction is needed again
+    # here and for the same reason they give: the corrections localization
+    # introduces are dynamically inconsistent, and the biharmonic term
+    # amplifies the short scales they create until the forecast blows up. The
+    # failure is in `propagate`, not in the analysis.
+    dt: float = 0.3125
     bc: str = "dirichlet"
     scheme: str = "rk4"
     rkh2: float = 1e-11          # ten times the model default; see the header

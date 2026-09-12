@@ -46,7 +46,8 @@ import pandas as pd
 from common import (ExperimentContext, get_scale, latex_table, make_testbed,
                     method_allowed, parse_cli, setup_matplotlib, shard_cells)
 from common import load_frozen
-from qgloc import (RadiusObjective, RadiusSpec, SnapshotWriter, analyse_fast,
+from qgloc import (Diverged, RadiusObjective, RadiusSpec, SnapshotWriter,
+                   analyse_fast,
                    cluster_auto, defaults_for, forecast, get_optimizer)
 from qgloc.metaheuristics import CONTROLS, LABELS, METAHEURISTICS
 from qgloc.progress import Progress
@@ -80,10 +81,19 @@ def run_one(bed, X0, x_true0, search, scale, seed, criterion="cv",
     rows, history, top = [], [], []
     theta_prev = None
 
+    diverged_at = -1
     for k in range(cfg.cycles):
         t0 = time.perf_counter()
-        fc = forecast(bed, X, x_true, rng, stride=scale.stride,
-                      offset=k % scale.stride)
+        try:
+            fc = forecast(bed, X, x_true, rng, stride=scale.stride,
+                          offset=k % scale.stride)
+        except RuntimeError as exc:
+            # The forecast could not be propagated. A sparse network with a
+            # short radius leaves gradients the biharmonic term amplifies; the
+            # run stops here and the cycle is recorded, rather than the whole
+            # experiment ending.
+            diverged_at = k
+            break
         x_true = fc["x_true"]
         xb = fc["xb"]
 
@@ -151,11 +161,15 @@ def run_one(bed, X0, x_true0, search, scale, seed, criterion="cv",
         for t in obj.top(scale.n_top):
             top.append(dict(cycle=k, rank=t["rank"], value=t["value"],
                             theta=str(t["theta"])))
+        for r in rows:
+            r.setdefault("diverged_at", -1)
 
         if on_cycle is not None:
             on_cycle(k, fc, xb, xa, Xa, x_true, labels, r_vec, rec, obj)
         X = Xa
 
+    for r in rows:
+        r["diverged_at"] = diverged_at
     return rows, history, top
 
 
@@ -239,9 +253,12 @@ def main(scale_name=None):
             top_rows.append(dict(exp_id=EXP_ID, N=N, search=LABELS[search],
                                  criterion=crit, run=run, **t))
         cut = scale.burn_in
+        tail = [r["rmse"] for r in cyc[cut:]]
+        d = cyc[0]["diverged_at"] if cyc else 0
         prog.step(f"N={N} {LABELS[search]:<20s} {crit:<6s} run={run} "
-                  f"rmse={np.mean([r['rmse'] for r in cyc[cut:]]):.4f} "
-                  f"({time.time()-t0:.0f}s)")
+                  + (f"DIVERGED at {d}" if d >= 0 else
+                     f"rmse={np.mean(tail):.4f}" if tail else "no cycles")
+                  + f" ({time.time()-t0:.0f}s)")
     prog.done()
 
     df = pd.DataFrame(rows)
@@ -255,6 +272,13 @@ def main(scale_name=None):
         ctx.finish(summary=dict(n_cells=len(cells)))
         return
 
+    if "diverged_at" in df.columns:
+        div = (df.groupby(["N", "search", "criterion", "run"])["diverged_at"]
+               .max().rename("diverged_at").reset_index())
+        ctx.save_table(div, "divergence.csv")
+        nd = int((div["diverged_at"] >= 0).sum())
+        if nd:
+            print(f"  {nd} of {len(div)} runs did not complete all cycles")
     post = df[df["cycle"] >= scale.burn_in]
     summary = (post.groupby(["N", "criterion", "search", "is_control"])
                .agg(rmse=("rmse", "mean"), rmse_q=("rmse_q", "mean"),

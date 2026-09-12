@@ -57,7 +57,7 @@ the four edges of the unit square $(x,y) \in [0,1]^2$.
 | $A$ | `rkh2` | $\mathbf{10^{-11}}$ | biharmonic dissipation |
 | | `rkh` | $-5\times10^{-8}$ | Laplacian friction (negative, as in the original) |
 | | `rkb` | $3\times10^{-4}$ | bottom friction |
-| | `dt` | $1.25$ | time step, RK4 |
+| | `dt` | $0.3125$ | time step, RK4 |
 | | `mrefin` | $5$ | grid refinement, $49\times49$ per field |
 | | `lx` | $1.0$ | domain is the unit square |
 | $n$ | | $4802$ | vector length, $q$ and $\psi$ stacked |
@@ -69,7 +69,19 @@ between $t = 500$ and $t = 8000$, so there is no stationary regime and nothing
 to sample a climatology from. At $10^{-11}$ it settles: $1.107\times10^{4}$ at
 $t = 20000$ against $1.222\times10^{4}$ at $t = 60000$. Sakov and Oke report exactly this, raising the
 dissipation by ten and reducing the step from 1.5 to 1.25 to obtain a stable
-assimilating system. Everything else is the reference value.
+assimilating system. The same reduction was needed again here, and further: at
+`dt = 1.25` the forecast blows up when the network is sparse and the radius
+short, because the analysis corrects the observed points hard and leaves their
+neighbours alone, and the biharmonic term amplifies the gradients that creates.
+The failure is in `propagate`, not in the analysis. `dt = 0.3125` survives
+almost all of the sweep.
+
+Configurations that still diverge are **recorded and not avoided**. Which
+combinations of observation density and radius a scheme cannot survive is a
+result: `divergence.csv` holds the map, and Sakov and Oke leave the same cells
+blank in their figures. A diverged cell no longer ends the run.
+
+Everything else is the reference value.
 
 The reference implementation is `qg-leapfrog-stability`; `pyteda` reproduces it
 to four digits on the same configuration, including a boundary asymmetry that

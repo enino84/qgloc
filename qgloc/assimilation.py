@@ -303,10 +303,34 @@ def analyse(bed, fc, r_vector, method="letkf", mask=None, extra=None):
 
 def assimilate(bed, X, x_true, r_vector, rng, method="letkf", stride=None,
                offset=0, extra=None):
-    """One full cycle: forecast then analysis."""
+    """One full cycle: forecast then analysis.
+
+    Routes the modified-Cholesky filter to :func:`analyse_fast`, so that the
+    sweep and the benchmark run the *same* analysis. They did not for a while
+    and the symptom was visible in the output: the sweep reported a gain in psi
+    of exactly zero, because the pyteda path leaves the psi block untouched
+    while the fast path rebuilds it from the analysed q. An exact zero in a
+    column that should carry noise is worth chasing.
+    """
     fc = forecast(bed, X, x_true, rng, stride=stride, offset=offset)
-    Xa = analyse(bed, fc, r_vector, method=method, extra=extra)
+    if method in ("enkf-modified-cholesky", "fast"):
+        Xa = analyse_fast(bed, fc, r_vector)
+    else:
+        Xa = analyse(bed, fc, r_vector, method=method, extra=extra)
     return Xa, fc["x_true"], fc["xb"], fc["idx"]
+
+
+class Diverged(RuntimeError):
+    """The forecast could not be propagated.
+
+    Not a bug to be avoided. A sparse network with a short radius corrects the
+    observed points hard and leaves their neighbours alone, so the analysed
+    field carries gradients the model cannot digest and the biharmonic term
+    amplifies them until the integration fails. Sakov and Oke report the same
+    and leave the diverged configurations blank in their figures: the map of
+    where a scheme diverges is a result, not an accident, so it is recorded
+    per cell rather than allowed to end the run.
+    """
 
 
 def run_cycles(bed, X0, x_true0, radius, seed, method="letkf", stride=None,
@@ -325,9 +349,12 @@ def run_cycles(bed, X0, x_true0, radius, seed, method="letkf", stride=None,
 
     rows = []
     for k in range(cfg.cycles):
-        Xa, x_true, xb, idx = assimilate(
-            bed, X, x_true, r_vec, rng, method=method, stride=stride,
-            offset=(k % (stride or cfg.obs_stride)) if moving else 0)
+        try:
+            Xa, x_true, xb, idx = assimilate(
+                bed, X, x_true, r_vec, rng, method=method, stride=stride,
+                offset=(k % (stride or cfg.obs_stride)) if moving else 0)
+        except (RuntimeError, FloatingPointError) as exc:
+            raise Diverged(f"cycle {k}: {exc}") from exc
         xa = Xa.mean(axis=1)
         rec = dict(cycle=k, p_obs=int(idx.size),
                    spread=float(np.mean(np.std(bed.normalize(Xa), axis=1))))

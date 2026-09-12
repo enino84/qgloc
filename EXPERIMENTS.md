@@ -8,7 +8,7 @@ Model and testbed shared by all three experiments.
 | Resolution | `mrefin=5`, $49\times49$ per field, vector length $n = 4802$ |
 | Fields | $q$ (potential vorticity), $\psi$ (streamfunction) |
 | Estimated | **$q$ only**, $2401$ components: $\psi$ is a diagnostic the model recomputes from $q$ at every step |
-| Integrator | RK4, `dt = 1.25`, Dirichlet boundary |
+| Integrator | RK4, `dt = 0.3125`, Dirichlet boundary |
 | Dissipation | `rkh2 = 1e-11` (ten times the model default) |
 | Climatology | spin-up from rest to `t = 20000`, then **200 snapshots** every 250 units |
 | Ensemble | drawn at random from that pool (members and truth) |
