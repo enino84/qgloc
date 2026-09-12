@@ -236,10 +236,10 @@ and the factors are assembled as
 $$
 \mathbf{L}_{ii} = 1, \quad
 \mathbf{L}_{i,P(i,r_i)} = -\boldsymbol{\beta}_i^{\top}, \quad
-\mathbf{D}_{ii} = \operatorname{var}\big(\Delta\mathbf{X}_i
+\mathbf{D}_{ii} = \mathrm{var}\big(\Delta\mathbf{X}_i
                   - \mathbf{X}_P\boldsymbol{\beta}_i\big)^{-1},
 \qquad
-\widehat{\mathbf{B}}^{-1}(\mathbf{r}) = \mathbf{L}^{\top}\mathbf{D}\,\mathbf{L}.
+\hat{\mathbf{B}}^{-1}(\mathbf{r}) = \mathbf{L}^{\top}\mathbf{D}\,\mathbf{L}.
 $$
 
 Two properties of this form drive the whole design.
@@ -248,7 +248,7 @@ Two properties of this form drive the whole design.
 depend on $r_i$ and on nothing else, so changing one component of the radius
 vector leaves every other row untouched. That is what the row cache exploits.
 
-**Positive definiteness is structural.** $\widehat{\mathbf{B}}^{-1}$ is
+**Positive definiteness is structural.** $\hat{\mathbf{B}}^{-1}$ is
 positive definite for any $\mathbf{r}$, because it has the form
 $\mathbf{L}^{\top}\mathbf{D}\mathbf{L}$ with $\mathbf{D}$ diagonal and
 positive. Truncating an already-formed precision does not preserve this: masking
@@ -258,7 +258,7 @@ tested, with minimum eigenvalues as negative as $-2.8\times10^{4}$.
 The analysis solves
 
 $$
-\big(\widehat{\mathbf{B}}^{-1} + \mathbf{H}^{\top}\mathbf{R}^{-1}\mathbf{H}\big)\,
+\big(\hat{\mathbf{B}}^{-1} + \mathbf{H}^{\top}\mathbf{R}^{-1}\mathbf{H}\big)\,
 \delta\mathbf{x} = \mathbf{H}^{\top}\mathbf{R}^{-1}(\mathbf{y} - \mathbf{H}\mathbf{x}^b).
 $$
 
