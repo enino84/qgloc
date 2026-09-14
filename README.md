@@ -1,19 +1,19 @@
-# Localization radius on the quasi-geostrophic model
+# Adaptive localization by observation assignment
 
-The localization radius of an ensemble Kalman filter is normally tuned against
-a known truth in a synthetic experiment and then held fixed. This repository
-studies where that choice actually matters, and whether a radius that varies in
-space can be estimated rather than tuned.
+The localization radius of an ensemble Kalman filter is normally tuned once
+against a known truth and then held fixed. This repository replaces it.
 
-The model is the 1.5-layer quasi-geostrophic system of Sakov and Oke, as
-implemented in `pyteda`. It was chosen because Lorenz-96 cannot answer the
-question: with a uniform grid, uniform forcing and identical observations
-everywhere, no grid point has any reason to want a different radius from its
-neighbour, so a negative result there says nothing about the idea. The QG model
-has two fields with genuinely different correlation scales, the potential
-vorticity `q` carries fine filaments while the streamfunction `psi` solves a
-Helmholtz problem on `q` and is smooth, and a flow that is not homogeneous:
-an active jet, quiet corners, and eddies shedding in between.
+Every model component grows a neighbourhood until it holds a few candidate
+observations, and is then updated by **exactly one** of them, or by none. The
+radius is not a parameter: it is the distance to whichever observation the
+component ended up using. The choice minimizes a variational cost evaluated at
+a scalar local analysis, computed from ensemble anomalies and observations
+alone, with no reference trajectory and nothing withheld. The resulting radius
+field fixes the predecessor sets of a modified-Cholesky precision, assembled
+once per cycle for a single global analysis.
+
+`FINDINGS.md` has the measurements, with the figures inline.
+`EXPERIMENTS.md` is the specification of what each experiment runs and records.
 
 ## The model
 
@@ -163,21 +163,31 @@ documented and tested on `q`, where the condition is actually imposed.
 
 ```
 qgloc/
-  testbed.py        model, ensemble recipe, lattice, per-field errors
-  assimilation.py   the cycle, the radius parameterizations, the clustering
-  objective.py      budget-counted objectives, with the search recorded
-  persist.py        two-tier snapshot archive
-  metaheuristics/   tabu, SA, FPA, firefly, GA + random and exhaustive controls
-experiments/        one script per experiment, stable identifiers
-scripts/            runner
-tests/              25 tests, each guarding a claim
+  testbed.py     the model, the climatological ensemble, the lattice
+  assignment.py  candidates, the local cost, the searches, the coupled variant
+  precision.py   modified-Cholesky precision, rows cached, ridge trace-scaled
+  persist.py     snapshot archive
+experiments/
+  exp00_setup.py       diagnostics of the testbed, before anything is measured
+  exp01_assignment.py  the assignment in the loop against fixed radii
+tests/           18 tests, each guarding a claim
+figures/         the figures in FINDINGS.md
+paper/           assignment.tex
 ```
 
 ## Running
 
 ```bash
-make build                    # builds the image and runs the tests
-make smoke                    # a few minutes end to end, validates the pipeline
+make build                 # builds the image and runs the tests
+make smoke                 # a few minutes end to end
+make exp00 SCALE=paper     # the climatology cache and the setup diagnostics
+make exp01 SCALE=paper     # the assignment in the loop
+```
+
+Run `exp00` before launching shards: it writes the climatology cache, and
+without it every shard computes the same spin-up at once.
+
+```bash
 
 # the paper sweep, split across eight containers
 for i in 0 1 2 3 4 5 6 7; do
@@ -187,33 +197,10 @@ done
 docker logs -f qgloc-s0
 ```
 
-Order and cost at paper scale, with the measured 0.36 s per objective
-evaluation:
-
-| step | what it does | time |
-|---|---|---|
-| `make exp00 SCALE=paper` | builds the climatology, checks the setup | 1 min |
-| `make exp01 SCALE=paper` | locates the regime and the useful radius range | 7 min |
-| `make exp02 SCALE=paper` | calibrates and freezes the search parameters | 3 h |
-| `make exp03 SCALE=paper` | the benchmark | 20 h, or 2.5 h with 8 shards |
-
-Run `exp00` before launching shards: it writes the climatology cache, and
-without it every shard would compute the same spin-up at once. Each shard
-writes `metrics_shard<i>.csv` into the same directory; concatenate them
-afterwards.
-
-The whole suite writes about 80 MB. Peak memory is 200 to 400 MB per process,
-so eight shards fit in roughly 3 GB.
-
-The long spin-up and the initial ensembles are cached under `results/cache`,
-which is a mounted volume, so a second run starts in seconds. Deleting that
-directory forces them to be recomputed.
-
 ## Experiments
 
 | id | question |
 |---|---|
-| `EXP-01-REGIME` | Sweeping lattice spacing against radius: where does the radius become a two-sided decision rather than a boundary optimum? |
 
 The paper configuration is `mrefin=5` (49x49 per field, 4802 components),
 20 and 40 ensemble members, 60 cycles at 20 time units, three lattice spacings
@@ -273,76 +260,6 @@ $$
 \big(\hat{\mathbf{B}}^{-1} + \mathbf{H}^{\top}\mathbf{R}^{-1}\mathbf{H}\big)\,
 \delta\mathbf{x} = \mathbf{H}^{\top}\mathbf{R}^{-1}(\mathbf{y} - \mathbf{H}\mathbf{x}^b).
 $$
-
-## The optimization problem
-
-The decision variable is a **vector of integers**, and its length is the number
-of radii being estimated. With $K$ clusters it has $K$ components, one per cluster of $q$, each in
-$\{1, \dots, r_{\max}\}$. With $K = 4$ and $r_{\max} = 8$ the space has $12^{4} = 20736$ elements; with
-$K = 8$, about $4.3\times10^{8}$.
-
-Nothing in the search ever produces a real-valued solution and nothing is
-rounded. A vector is born integer and stays integer; a test asserts it for
-every search. The one place a real number appears is where a Lévy draw sets
-*how many* components a move copies, which discretizes a counter, not a
-solution.
-
-`RadiusSpec.expand` turns that vector into the per-component radii the filter
-needs, by giving every grid point the radius of its cluster. That
-expansion is deterministic and outside the search.
-
-**The clusters are not spatially contiguous.** They come from k-means on
-ensemble features, log background variance and the ensemble correlation at
-lags one and two, so points are grouped by how they behave, not by where they
-are. Two points at opposite corners can share a radius. This matters for the
-search: one component controls grid points scattered over the whole domain, the
-components are close to independent, and moves that change few components at a
-time are favoured.
-
-### The searches
-
-All five share one neighbourhood, pick a component at random, give it a
-different integer value, so a comparison between them measures the acceptance
-rule rather than the move.
-
-| search | how it moves |
-|---|---|
-| **Tabu** | scans the neighbourhood, takes the best non-tabu neighbour, forbids a (component, value) pair for `tenure` iterations, with aspiration |
-| **Simulated annealing** | the same neighbourhood, accepting a worsening move with probability `exp(-delta/T)`; the step shrinks with temperature, so it is a tabu search with an unrestricted but cooling neighbourhood |
-| **Genetic** | uniform crossover on whole components, integers have no meaningful midpoint, plus one-component mutation and tournament selection |
-| **Ant colony** | a pheromone table over (component, value) pairs; each ant builds a whole vector by choosing a value per component independently, the best ants reinforce, everything evaporates |
-| **Flower pollination** | global: a Lévy draw gives a number of components, copied from the incumbent best, so the heavy tail gives mostly small moves with occasional large ones. Local: the components in which two candidates differ are found and a random subset is copied |
-
-And two controls, which are not competitors but the calibration of the
-comparison: **random sampling** at the same budget, and an **exhaustive sweep**
-where the space is small enough to enumerate. When the sweep completes, its
-`info['complete']` is true and every other search can be scored as a gap to the
-true optimum rather than against its rivals.
-
-Firefly is implemented and registered but kept out of the comparison: it and
-flower pollination are both Yang's, and one of the two represents that family.
-Adding `"firefly"` to `METAHEURISTICS` puts it back everywhere.
-
-**One of them underperforms and is reported that way.** On a separable
-quadratic over four components, averaged across six seeds, tabu reaches the
-exact optimum every time, random sampling gets 3.0, and simulated annealing
-gets 4.0, worse than random, and slower cooling makes it worse still. The
-annealing spends too much of a small budget on temperature levels. It stays in
-the comparison as it performs; tuning it until it wins would defeat the purpose
-of having controls at all.
-
-## The parameterizations
-
-`RadiusSpec` maps a parameter vector to a per-component radius array, which
-pyteda accepts directly.
-
-`uniform` is one number. `per_field` is two, and has the clearest physical
-justification. `clustered` is `K` per field, where the clusters come from
-ensemble-derived features, log background variance and the ensemble
-correlation at lags one and two, so the radius can follow the flow while the
-number of estimated parameters stays at `2K`. All three are nested: a uniform
-radius is reachable by each, which is what makes a comparison between them a
-comparison of ideas rather than of code paths.
 
 ## What is stored
 

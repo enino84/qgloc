@@ -28,15 +28,12 @@ services:
     container_name: qgloc
     command: bash /work/scripts/run_all.sh
 
-  regime:
-    <<: *common
-    container_name: qgloc-regime
-    command: python /work/experiments/exp01_regime.py
 
-  clusters:
+
+  assignment:
     <<: *common
-    container_name: qgloc-clusters
-    command: python /work/experiments/exp03_cycled.py
+    container_name: qgloc-assignment
+    command: python /work/experiments/exp01_assignment.py
 
   shard:
     <<: *common

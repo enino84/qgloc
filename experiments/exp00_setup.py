@@ -72,7 +72,7 @@ def main(scale_name=None):
 
     # ---- lattice ----
     lat = []
-    for st in scale.strides:
+    for st in (scale.stride,):
         idx = bed.checkerboard(st)
         k = max(1, bed.g // st)
         lat.append(dict(stride=st, n_obs=int(idx.size), density=bed.density(st),
@@ -144,10 +144,9 @@ def main(scale_name=None):
     ctx.save_fig(fig, "initial_ensemble.png")
 
     # ---- figure 3: the observation lattices ----
-    fig, axes = plt.subplots(1, len(scale.strides),
-                             figsize=(2.8 * len(scale.strides), 3.0))
+    fig, axes = plt.subplots(1, 1, figsize=(3.2, 3.4))
     axes = np.atleast_1d(axes)
-    for a, st in zip(axes, scale.strides):
+    for a, st in zip(axes, (scale.stride,)):
         idx = bed.checkerboard(st)
         b = bed.blocks["psi"]
         mask = np.zeros(bed.g * bed.g)

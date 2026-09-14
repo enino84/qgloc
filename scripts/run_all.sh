@@ -11,7 +11,7 @@ RESULTS="${RESULTS_DIR:-${HERE}/results}"
 mkdir -p "${RESULTS}/cache"
 LOG="${RESULTS}/run_${SCALE}${SHARD_INDEX:+_shard$SHARD_INDEX}.log"
 
-SELECTED="${EXPERIMENTS:-exp00_setup exp01_regime exp02_calibration exp03_cycled}"
+SELECTED="${EXPERIMENTS:-exp00_setup exp01_assignment}"
 echo "=== qgloc  scale=${SCALE}  $(date -Is) ===" | tee -a "${LOG}"
 echo "experiments: ${SELECTED}"                   | tee -a "${LOG}"
 

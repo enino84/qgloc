@@ -42,71 +42,39 @@ def shard_cells(cells):
 
 @dataclass
 class Scale:
+    """Everything an experiment varies, in one place.
+
+    Only what the assignment method needs. The fields of the earlier
+    radius-and-clusters approach are gone along with the code that used them.
+    """
     name: str
-    mrefin: int = 6
+    # model and climatology
+    mrefin: int = 5
     spinup: float = 20000.0
-    # A large pool so that runs with different seeds really are independent:
-    # drawing 41 members out of 60 leaves two runs sharing most of their
-    # ensemble, and calling those independent would understate every spread in
-    # the tables. 200 snapshots at 250 units apart is 50000 units of
-    # integration, about ten minutes at mrefin 6, paid once.
     n_snapshots: int = 200
     snapshot_every: float = 250.0
+    # filter
     ensemble_size: int = 40
-    # The ensemble size is an axis, not a setting. It is what makes the optimal
-    # radius move: fewer members means more sampling noise and a tighter
-    # radius, more members supports a longer one. If the sweep does not
-    # reproduce that, it is not measuring what it claims to.
-    ensemble_sizes: tuple = (20, 40)
     cycles: int = 60
     burn_in: int = 15
-    # Sakov-Oke assimilate every fourth step, which at dt=1.25 is 5.0. Here it
-    # is 20: with tau_L about 31.5 the background error then grows by a real
-    # factor between cycles, so the radius is a consequential choice rather
-    # than a detail, while staying below the regime where the filter loses the
-    # state. Whether it does stay below is checked in EXP-01.
     obs_freq: float = 20.0
-    runs: int = 3
-    # observation lattice: density is 1/stride^2
-    strides: tuple = (2, 4, 8)
-    radii: tuple = (1, 2, 3, 4, 6, 8, 10, 12)
-    # 8, not 12. A large radius destroys the sparsity that makes the modified
-    # Cholesky worth using: measured at n_q = 2401, the precision goes from
-    # 0.5% non-zero at r = 1 to 51% at r = 12, and one objective evaluation
-    # from 0.024 s to 1.066 s, a factor of 44. Radii that expensive are also
-    # bad: EXP-01 puts the optimum at the short end.
-    r_max: int = 8
-    K_list: tuple = (1, 2, 3, 4, 6)
-    # K is chosen by silhouette inside each cycle rather than fixed, so what
-    # the scale sets is the range to search over.
-    K_range: tuple = (2, 8)
-    budget: int = 120
+    runs: int = 2
+    # observations: a lattice of this spacing, shifted each cycle
     stride: int = 4
-    cv_fraction: float = 0.30
-    warm_start: bool = True
-    # The baseline arm: assimilation at a fixed uniform radius, no
-    # optimization. Set from the optimum EXP-01 reports for the stride in use.
-    uniform_radius: int = 1
-    # Calibration (EXP-03). Held-out problems, disjoint from everything the
-    # benchmark reports.
-    calib_problems: int = 4
-    calib_repeats: int = 3
-    # How many of the best distinct vectors each search visited are kept, and
-    # at which cycles the resulting precision matrix is stored.
-    n_top: int = 10
-    precision_cycles: tuple = (15, 45)
-    budgets: tuple = (60, 150)
-    n_repeats: int = 3
-    # Independent 70/30 partitions averaged by the cross-validated criterion.
-    # One partition already removes the circularity; more cut the variance,
-    # because with a single split the arg-min moves with whichever 30% was
-    # drawn.
-    cv_fraction: float = 0.3
-    methods: tuple = ("letkf", "enkf-modified-cholesky")
-    # Spread over the whole run, including one before the burn-in and one
-    # at the end. The burn-in only affects the averages in the summary:
-    # metrics.csv keeps every cycle, so how many to discard can be decided
-    # afterwards without rerunning anything.
+    obs_frac: float = 0.05          # observation error, fraction of the spread
+    # the assignment
+    kappa: int = 4                  # candidate observations per component
+    r_max: int = 8                  # ceiling on how far a neighbourhood grows
+    ridge_alpha: float = 0.3        # trace-scaled; see FINDINGS
+    # arms
+    # Up to 7 because the assignment itself produces radii up to 7: a baseline
+    # that was never allowed to try them would make the comparison unfair in
+    # the method's favour.
+    baseline_radii: tuple = (1, 2, 3, 4, 5, 6, 7)
+    # The ensemble size is an axis: the radius the assignment settles on has to
+    # be one the ensemble can support. At N = 12 it lands near radius 3 and
+    # diverges, but so does a fixed radius 3 at that size.
+    assignment_sizes: tuple = (40, 80, 160)
     snapshot_cycles: tuple = (0, 15, 30, 45, 59)
 
     @property
@@ -115,39 +83,15 @@ class Scale:
 
 
 SCALES = {
-    "smoke": Scale(name="smoke", mrefin=5, spinup=2000.0, n_snapshots=30,
-                   snapshot_every=100.0, ensemble_size=12,
-                   ensemble_sizes=(8, 12),
-                   cycles=10, burn_in=4, runs=1, strides=(2, 4),
-                   radii=(1, 2, 4), K_list=(1, 2), budgets=(20,),
-                   n_repeats=1, snapshot_cycles=(0, 7),
-                   budget=25, K_range=(2, 4),
-                   calib_problems=2, calib_repeats=1,
-                   n_top=5, precision_cycles=(5,),
-                   methods=("enkf-modified-cholesky",)),
-    "quick": Scale(name="quick", mrefin=5, spinup=8000.0, n_snapshots=80,
+    "smoke": Scale(name="smoke", mrefin=5, spinup=2000.0, n_snapshots=60,
+                   snapshot_every=100.0, ensemble_size=24, cycles=10,
+                   burn_in=4, runs=1, assignment_sizes=(12, 24),
+                   baseline_radii=(1, 2, 3),
+                   snapshot_cycles=(0, 9)),
+    "quick": Scale(name="quick", mrefin=5, spinup=8000.0, n_snapshots=120,
                    snapshot_every=200.0, cycles=25, burn_in=8,
-                   ensemble_sizes=(12, 24), budget=60, K_range=(2, 6),
-                   calib_problems=3, calib_repeats=2,
-                   runs=2, strides=(2, 4, 6), radii=(1, 2, 4, 6, 8),
-                   K_list=(1, 2, 4), budgets=(40, 100), n_repeats=2, snapshot_cycles=(0, 10, 19),
-                   methods=("enkf-modified-cholesky",)),
-    # 60 cells at about 22 min each with EnKF-MC: roughly 22 hours on one
-    # core, under three with eight shards. The radius grid is six values
-    # rather than eight and the runs two rather than three, which is where the
-    # trimming was done: the sweep needs breadth in density more than
-    # resolution in radius, and the cycle-to-cycle spread within a run already
-    # gives most of what a third run would.
-    # mrefin 5 (49x49 per field, 4802 components), not 6. The cost that
-    # decides this is the analysis, not the integration: one objective
-    # evaluation is 0.45 s here against about 1.8 s at mrefin 6, and EXP-02
-    # makes hundreds of them per assimilation cycle. The flow at 49x49 keeps
-    # the heterogeneity the study needs -- an active region and quiet corners,
-    # two fields with different correlation scales -- and psi is visually
-    # almost unchanged from 193x193, though q does lose its finer filaments.
-    "paper": Scale(name="paper", mrefin=5, ensemble_size=40, runs=2,
-                   radii=(1, 2, 3, 4, 6, 8),
-                   methods=("enkf-modified-cholesky",)),
+                   assignment_sizes=(24, 40), snapshot_cycles=(0, 12, 24)),
+    "paper": Scale(name="paper"),
 }
 
 
@@ -181,7 +125,8 @@ def config_for(scale, **over):
                    n_snapshots=scale.n_snapshots,
                    snapshot_every=scale.snapshot_every,
                    ensemble_size=scale.ensemble_size, cycles=scale.cycles,
-                   burn_in=scale.burn_in, obs_freq=scale.obs_freq)
+                   burn_in=scale.burn_in, obs_freq=scale.obs_freq,
+                   ridge_alpha=scale.ridge_alpha)
     for k, v in over.items():
         setattr(cfg, k, v)
     return cfg
@@ -221,7 +166,17 @@ def climatology(cfg):
 
 
 def make_testbed(scale, **over):
+    """Build the testbed, with a snapshot pool large enough for the ensemble.
+
+    Members and truth are drawn without replacement, so the pool has to exceed
+    the largest ensemble the caller will ask for. Sweeping N upward without
+    growing the pool is a quiet way to end up with runs that share most of
+    their members.
+    """
     cfg = config_for(scale, **over)
+    need = cfg.ensemble_size + 1
+    if cfg.n_snapshots + 1 < need:
+        cfg.n_snapshots = int(2 * need)
     return Testbed(cfg, climatology(cfg))
 
 
@@ -233,29 +188,6 @@ def cached_ensemble(bed, seed):
     getting out of step.
     """
     return bed.build_ensemble(seed)
-
-
-def load_frozen(search):
-    """Calibrated parameters if EXP-03 has run, defaults otherwise.
-
-    Reading them from disk rather than hard-coding means a re-calibration
-    propagates to every experiment without touching their code, and that the
-    paper can say no constant in it was chosen by hand.
-    """
-    from qgloc.metaheuristics import defaults_for
-    params = defaults_for(search)
-    path = os.path.join(RESULTS_ROOT, "frozen_params.json")
-    if os.path.exists(path):
-        try:
-            with open(path) as fh:
-                blob = json.load(fh)
-            got = blob.get("params", {}).get(search)
-            if got:
-                params.update(got)
-                log(f"using calibrated parameters for {search}: {got}")
-        except Exception as exc:
-            log(f"could not read {path}: {exc}", level="WARN")
-    return params
 
 
 class ExperimentContext:

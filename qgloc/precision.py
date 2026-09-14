@@ -81,16 +81,31 @@ import numpy as np
 from scipy.sparse import csr_matrix, diags
 
 
-def ridge_closed_form(X, y, alpha):
-    """``(X'X + alpha I)^{-1} X'y``.
+def ridge_closed_form(X, y, alpha, scale=True):
+    """``(X'X + a I)^{-1} X'y``, with ``a`` a fraction of the trace of X'X.
 
-    The same estimator sklearn's ``Ridge(fit_intercept=False)`` computes, with
-    alpha applied absolutely rather than scaled, so the two agree to machine
-    precision on the same inputs.
+    Scaling matters more than the value. An absolute penalty is meaningless
+    unless the state happens to be of order one: in model units the variance of
+    q here is of order 1e7, so alpha = 0.01 is fifteen orders of magnitude
+    below the diagonal and regularizes nothing. The regression then interpolates
+    its predecessors exactly whenever the ensemble is small, the residual
+    variance is rounding noise, and its inverse -- which is the diagonal of the
+    precision -- explodes.
+
+    Measured: with an absolute penalty the median diagonal of the precision was
+    2059 against an inverse ensemble variance of 2.25e-6, a factor of 9e8. The
+    filter then believes the background is a billion times more certain than it
+    is and ignores every observation; the analysis made the error *worse* at
+    every radius. With the penalty scaled by the trace the diagonal returns to
+    the order of the ensemble variance and the analysis improves the background.
+
+    ``scale=False`` reproduces sklearn's ``Ridge(fit_intercept=False)`` exactly,
+    which is what pyteda uses, and is kept for the equivalence test.
     """
     p = X.shape[1]
     G = X.T @ X
-    G.flat[:: p + 1] += alpha
+    a = alpha * (np.trace(G) / p) if scale else alpha
+    G.flat[:: p + 1] += a
     return np.linalg.solve(G, X.T @ y)
 
 
@@ -108,11 +123,12 @@ class PrecisionBuilder:
         Ridge penalty, matching pyteda's default.
     """
 
-    def __init__(self, model, n, alpha=0.01, active_mask=None,
-                 var_floor=1e-8):
+    def __init__(self, model, n, alpha=0.3, active_mask=None,
+                 var_floor=1e-8, scale_ridge=True):
         self.model = model
         self.n = int(n)
         self.alpha = float(alpha)
+        self.scale_ridge = bool(scale_ridge)
         self.var_floor = float(var_floor)
         self.active = (np.ones(self.n, dtype=bool) if active_mask is None
                        else np.asarray(active_mask, dtype=bool))
@@ -178,7 +194,7 @@ class PrecisionBuilder:
             out = (idx, np.empty(0), 1.0 / v if v > 0 else 0.0)
         else:
             X = self.DX[idx, :].T
-            beta = ridge_closed_form(X, y, self.alpha)
+            beta = ridge_closed_form(X, y, self.alpha, self.scale_ridge)
             resid = y - X @ beta
             v = float(np.var(resid))
             # Floor the residual variance relative to the component's own

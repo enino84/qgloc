@@ -91,6 +91,12 @@ class QGConfig:
     obs_std: float = 0.05        # in normalized units, so 5% of each spread
     obs_freq: float = 10.0       # time between assimilation cycles
     inflation: float = 1.15
+    # Trace-scaled, not absolute. An absolute penalty sits fifteen orders of
+    # magnitude below the diagonal of X'X in model units and regularizes
+    # nothing: the regressions interpolate their predecessors, the residual
+    # variance is rounding noise, and the diagonal of the precision comes out
+    # a factor of 1e9 too large. The filter then ignores every observation.
+    ridge_alpha: float = 0.3
     cycles: int = 40
     burn_in: int = 10
 
